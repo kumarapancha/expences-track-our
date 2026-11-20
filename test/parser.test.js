@@ -36,6 +36,15 @@ test('format B falls back to received time', () => {
   assert.strictEqual(parseSms(cases[2][0], rx).txnAt.toISOString(), rx.toISOString());
 });
 
+test('account 3009 is Sampath, everything else NTB', () => {
+  const { bankOf } = require('../src/services/bank');
+  assert.strictEqual(bankOf(parseSms(cases[0][0], rx)), 'sampath');
+  assert.strictEqual(bankOf(parseSms(cases[2][0], rx)), 'ntb');
+  assert.strictEqual(bankOf(parseSms(cases[3][0], rx)), 'ntb'); // NTB transfer *to* Sampath
+  assert.strictEqual(bankOf({ account: null, raw: 'LKR 9 debited from AC **3009 weird' }), 'sampath');
+  assert.strictEqual(bankOf({ source: 'manual' }), 'ntb');
+});
+
 test('ignores non-transaction SMS', () => {
   assert.strictEqual(parseSms('Your OTP is 123456. Do not share.', rx), null);
 });

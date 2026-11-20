@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const Transaction = require('../models/Transaction');
 const { applyRules } = require('../services/ingest');
 const { monthRange } = require('../services/dates');
+const { BANKS, bankOf, bankFilter } = require('../services/bank');
 
 const EDITABLE = ['type', 'amount', 'currency', 'description', 'merchant', 'category',
   'txnAt', 'excludeFromTotals', 'notes', 'account', 'reviewed'];
@@ -21,11 +22,13 @@ function pick(body) {
 const validId = (req, res, next) =>
   mongoose.isValidObjectId(req.params.id) ? next() : res.status(404).json({ error: 'Not found' });
 
-// GET /api/transactions?month=2026-11&currency=LKR&type=debit&category=Groceries&review=1&q=atm
+// GET /api/transactions?month=2026-11&bank=sampath&currency=LKR&type=debit&category=Groceries&review=1&q=atm
 router.get('/', async (req, res, next) => {
   try {
-    const { month, currency, type, category, review, q } = req.query;
+    const { month, currency, type, category, review, q, bank } = req.query;
+    if (bank && !BANKS.includes(bank)) return res.status(400).json({ error: 'bank must be sampath or ntb' });
     const filter = {};
+    const and = [];
     if (month) {
       const r = monthRange(month);
       if (!r) return res.status(400).json({ error: 'month must be YYYY-MM' });
@@ -36,15 +39,17 @@ router.get('/', async (req, res, next) => {
     if (category) filter.category = category;
     if (review === '1') {
       filter.reviewed = { $ne: true };
-      filter.$or = [{ parsed: false }, { possibleDuplicateOf: { $ne: null } }];
+      and.push({ $or: [{ parsed: false }, { possibleDuplicateOf: { $ne: null } }] });
     }
+    if (bank) and.push(bankFilter(bank));
+    if (and.length) filter.$and = and;
     let rows = await Transaction.find(filter).sort({ txnAt: -1 }).limit(1000).lean();
     if (q) {
       const needle = q.toUpperCase();
       rows = rows.filter((t) =>
         `${t.description || ''} ${t.merchant || ''} ${t.raw || ''} ${t.notes || ''}`.toUpperCase().includes(needle));
     }
-    res.json(rows);
+    res.json(rows.map((t) => ({ ...t, bank: bankOf(t) })));
   } catch (e) { next(e); }
 });
 
@@ -59,6 +64,18 @@ router.post('/', async (req, res, next) => {
     if (!data.category || data.category === 'Uncategorized') { tx.categoryLocked = false; await applyRules(tx); }
     await tx.save();
     res.status(201).json(tx);
+  } catch (e) { next(e); }
+});
+
+// Bulk delete: POST /api/transactions/bulk-delete { ids: [...] }
+router.post('/bulk-delete', async (req, res, next) => {
+  try {
+    const ids = req.body?.ids;
+    if (!Array.isArray(ids) || !ids.length || ids.length > 1000 || !ids.every((id) => mongoose.isValidObjectId(id))) {
+      return res.status(400).json({ error: 'ids must be a list of 1–1000 transaction ids' });
+    }
+    const { deletedCount } = await Transaction.deleteMany({ _id: { $in: ids } });
+    res.json({ deleted: deletedCount });
   } catch (e) { next(e); }
 });
 

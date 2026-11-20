@@ -63,7 +63,8 @@ Use form parameters rather than a hand-typed JSON body. Bank SMS contain line br
   - `… was performed on your Account No. … DR/CR. Current Bal …` (no time in the SMS, so the received time is used)
   - `Funds successfully transferred! … on 16 November 2026 07:13 PM`
 
-  Unknown SMS are saved as **unparsed** and appear under *Review*. Open one, fill in the amount and type, and save. To support a new format, add a pattern and a test in `test/parser.test.js`.
+  Only SMS matching one of these formats are stored. Anything else (OTPs, promos, unknown formats) gets a `202 { ignored: true }` reply and is not saved. To support a new format, add a pattern and a test in `test/parser.test.js`.
+- **Banks.** Account `**3009` is Sampath Bank; every other account is NTB (`src/services/bank.js`). The website has Sampath Bank / NTB / Total tabs, and the API takes `?bank=sampath|ntb`.
 - **Duplicates.** If a debit with the same amount and currency arrives in a *different* format within 15 minutes (for example, the CEFTS SMS plus the "Funds transferred" SMS), the second one is flagged and left out of totals. Use *Not a duplicate* if it was a real second transaction.
 - **Currencies** are never added together. Each currency gets its own card.
 - **Internal transfers.** Set the category to `Internal Transfer`, for example SGD account → LKR account. These are left out of totals.

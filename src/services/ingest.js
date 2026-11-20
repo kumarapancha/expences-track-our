@@ -45,6 +45,8 @@ async function ingestSms({ sender, body, receivedAt }) {
   const received = receivedAt ? new Date(receivedAt) : new Date();
   const safeReceived = isNaN(received) ? new Date() : received;
   const parsed = parseSms(body, safeReceived);
+  // Only the known Sampath / NTB transaction formats are stored; OTPs, promos etc. are dropped
+  if (!parsed) return { tx: null, created: false, ignored: true };
 
   const tx = new Transaction({
     source: 'sms',

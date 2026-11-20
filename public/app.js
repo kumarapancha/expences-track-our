@@ -7,8 +7,16 @@ const DEFAULT_CATEGORIES = [
   'Income (Foreign Transfer)', 'Uncategorized', 'Other',
 ];
 
+const SAMPATH_ACCOUNT = '3009';
+const BANK_NAMES = { sampath: 'Sampath Bank', ntb: 'NTB' };
+
 const $ = (id) => document.getElementById(id);
-const state = { month: currentMonth(), summary: null, rows: [], review: false, editing: null };
+const savedBank = (() => { try { return localStorage.getItem('bank'); } catch { return null; } })();
+const state = {
+  month: currentMonth(), summary: null, rows: [], review: false, editing: null,
+  selected: new Set(), shown: [],
+  bank: savedBank != null && ['sampath', 'ntb', ''].includes(savedBank) ? savedBank : 'sampath',
+};
 
 // ---------- helpers ----------
 async function api(path, opts = {}) {
@@ -82,12 +90,17 @@ $('logoutBtn').addEventListener('click', async () => { await api('/api/auth/logo
 // ---------- data ----------
 async function load() {
   $('month').value = state.month;
+  renderTabs();
+  const bankQ = state.bank ? `&bank=${state.bank}` : '';
   const [summary, rows] = await Promise.all([
-    api(`/api/summary?month=${state.month}`),
-    api(state.review ? '/api/transactions?review=1' : `/api/transactions?month=${state.month}`),
+    api(`/api/summary?month=${state.month}${bankQ}`),
+    api(state.review ? `/api/transactions?review=1${bankQ}` : `/api/transactions?month=${state.month}${bankQ}`),
   ]);
   state.summary = summary;
   state.rows = rows;
+  // Keep only selections that are still on screen (month/tab changes drop the rest)
+  const ids = new Set(rows.map((r) => r._id));
+  for (const id of state.selected) if (!ids.has(id)) state.selected.delete(id);
   showApp();
   render();
 }
@@ -101,17 +114,25 @@ function render() {
     ? 'Showing items that need review (unparsed SMS and possible duplicates).'
     : `${needsReview} item${needsReview === 1 ? '' : 's'} need review.`;
   $('reviewBtn').textContent = state.review ? 'Back to month' : 'Review';
-  $('listTitle').textContent = state.review ? 'Needs review' : 'Transactions';
+  const bankLabel = state.bank ? ` · ${BANK_NAMES[state.bank]}` : '';
+  $('listTitle').textContent = (state.review ? 'Needs review' : 'Transactions') + bankLabel;
 
   // currency cards (currencies are never added together)
   $('cards').replaceChildren(...(currencies.length ? currencies.map((c) => el('div', { class: 'card stat' },
-    el('div', { class: 'cur', textContent: c.currency }),
-    el('div', { class: 'row' }, el('span', { class: 'muted', textContent: 'Spent' }),
+    el('div', { class: 'cur', textContent: `${c.currency}${state.bank ? ` · ${BANK_NAMES[state.bank]}` : ' · Total'}` }),
+    el('div', { class: 'row' }, el('span', { class: 'muted', textContent: state.bank ? 'Spent' : 'Total spent' }),
       el('span', { class: 'big debit', textContent: money(c.spent) })),
     el('div', { class: 'row' }, el('span', { class: 'muted', textContent: 'Received' }),
       el('span', { class: 'credit', textContent: money(c.received) })),
     el('div', { class: 'row' }, el('span', { class: 'muted', textContent: 'Net' }),
       el('span', { textContent: money(c.net) })),
+    // Total tab: show how much of the spending came from each bank
+    ...(state.bank ? [] : [
+      el('div', { class: 'row split' }, el('span', { class: 'muted', textContent: 'Sampath Bank spent' }),
+        el('span', { class: 'debit', textContent: money(c.spentByBank.sampath) })),
+      el('div', { class: 'row' }, el('span', { class: 'muted', textContent: 'NTB spent' }),
+        el('span', { class: 'debit', textContent: money(c.spentByBank.ntb) })),
+    ]),
   )) : [el('div', { class: 'card muted', textContent: 'No transactions this month yet.' })]));
 
   // category breakdown
@@ -148,6 +169,7 @@ function renderRows() {
     (!cur || r.currency === cur) && (!type || r.type === type) && (!cat || r.category === cat) &&
     (!q || `${r.description || ''} ${r.merchant || ''} ${r.raw || ''} ${r.notes || ''}`.toUpperCase().includes(q)));
 
+  state.shown = rows;
   $('empty').classList.toggle('hidden', rows.length > 0);
   $('rows').replaceChildren(...rows.map((r) => {
     const desc = r.parsed ? (r.description || r.merchant || '(no description)') : (r.raw || '').slice(0, 80);
@@ -155,17 +177,69 @@ function renderRows() {
     if (!r.parsed) tags.push(el('span', { class: 'tag', textContent: 'unparsed' }));
     if (r.possibleDuplicateOf && !r.reviewed) tags.push(el('span', { class: 'tag', textContent: 'possible duplicate' }));
     if (r.source === 'manual') tags.push(el('span', { class: 'tag', textContent: 'manual' }));
+    if (!state.bank && r.bank) tags.push(el('span', { class: 'tag bank', textContent: BANK_NAMES[r.bank] }));
     const sub = [r.account ? `acct …${r.account}` : null, r.balance != null ? `bal ${money(r.balance, r.currency)}` : null]
       .filter(Boolean).join(' · ');
-    return el('tr', { class: r.excludeFromTotals ? 'excluded' : '', onclick: () => openEdit(r) },
-      el('td', { textContent: fmtDate(r.txnAt) }),
+    const checked = state.selected.has(r._id);
+    const tr = el('tr', { class: [r.excludeFromTotals ? 'excluded' : '', checked ? 'selected' : ''].join(' ').trim(), onclick: () => openEdit(r) },
+      el('td', { class: 'sel', onclick: (e) => e.stopPropagation() },
+        el('input', {
+          type: 'checkbox', checked, ariaLabel: 'Select transaction',
+          onchange: (e) => {
+            e.target.checked ? state.selected.add(r._id) : state.selected.delete(r._id);
+            tr.classList.toggle('selected', e.target.checked);
+            updateBulkBar();
+          },
+        })),
+      el('td', { class: 'date', textContent: fmtDate(r.txnAt) }),
       el('td', {}, el('div', {}, desc, ...tags), sub ? el('div', { class: 'sub', textContent: sub }) : null,
         el('div', { class: 'sub cat-inline', textContent: r.category || '' })),
-      el('td', { textContent: r.category || '' }),
+      el('td', { class: 'col-cat', textContent: r.category || '' }),
       el('td', { class: `num ${r.type || ''}`, textContent: r.amount != null ? `${r.type === 'debit' ? '−' : '+'}${money(r.amount, r.currency)}` : '—' }),
     );
+    return tr;
   }));
+  updateBulkBar();
 }
+
+// ---------- bulk select / delete ----------
+function updateBulkBar() {
+  const n = state.selected.size;
+  $('bulkBar').classList.toggle('hidden', n === 0);
+  $('bulkCount').textContent = `${n} selected`;
+  $('bulkDelete').textContent = 'Delete selected';
+  $('bulkDelete').dataset.confirm = ''; // any change to the selection needs a fresh confirm
+  const shownSelected = state.shown.filter((r) => state.selected.has(r._id)).length;
+  $('selectAll').checked = state.shown.length > 0 && shownSelected === state.shown.length;
+  $('selectAll').indeterminate = shownSelected > 0 && shownSelected < state.shown.length;
+}
+$('selectAll').addEventListener('change', (e) => {
+  for (const r of state.shown) e.target.checked ? state.selected.add(r._id) : state.selected.delete(r._id);
+  renderRows();
+});
+$('bulkClear').addEventListener('click', () => { state.selected.clear(); renderRows(); });
+$('bulkDelete').addEventListener('click', async () => {
+  const n = state.selected.size;
+  if (!n) return;
+  const btn = $('bulkDelete');
+  if (btn.dataset.confirm !== '1') {
+    btn.dataset.confirm = '1';
+    btn.textContent = `Confirm delete ${n}`;
+    return;
+  }
+  btn.dataset.confirm = '';
+  btn.disabled = true;
+  try {
+    await api('/api/transactions/bulk-delete', { method: 'POST', body: { ids: [...state.selected] } });
+    state.selected.clear();
+    await load();
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    btn.disabled = false;
+    updateBulkBar();
+  }
+});
 
 // ---------- edit / add ----------
 const form = $('editForm');
@@ -190,7 +264,8 @@ function openEdit(tx) {
   form.txnAt.value = toLocalInput(t.txnAt || new Date());
   form.description.value = t.description || '';
   form.category.value = t.category === 'Uncategorized' ? '' : (t.category || '');
-  form.account.value = t.account || '';
+  // New entries on the Sampath tab default to the Sampath account
+  form.account.value = t.account || (!tx && state.bank === 'sampath' ? SAMPATH_ACCOUNT : '');
   form.notes.value = t.notes || '';
   form.excludeFromTotals.checked = !!t.excludeFromTotals;
   $('editDialog').showModal();
@@ -261,6 +336,20 @@ $('ruleForm').addEventListener('submit', async (e) => {
 $('applyRulesBtn').addEventListener('click', async () => {
   const { updated } = await api('/api/rules/apply', { method: 'POST' });
   $('rulesMsg').textContent = `${updated} transaction${updated === 1 ? '' : 's'} updated.`;
+});
+
+// ---------- bank tabs ----------
+function renderTabs() {
+  for (const b of $('bankTabs').querySelectorAll('button')) {
+    b.setAttribute('aria-selected', String(b.dataset.bank === state.bank));
+  }
+}
+$('bankTabs').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-bank]');
+  if (!b || b.dataset.bank === state.bank) return;
+  state.bank = b.dataset.bank;
+  try { localStorage.setItem('bank', state.bank); } catch {}
+  load();
 });
 
 // ---------- controls ----------

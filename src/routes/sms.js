@@ -27,7 +27,10 @@ router.post('/', requireApiKey, anyText, async (req, res, next) => {
       return res.status(202).json({ ignored: true, reason: 'sender not in ALLOWED_SENDERS' });
     }
 
-    const { tx, created } = await ingestSms({ sender, body, receivedAt: src.receivedAt });
+    const { tx, created, ignored } = await ingestSms({ sender, body, receivedAt: src.receivedAt });
+    if (ignored) {
+      return res.status(202).json({ ignored: true, reason: 'not a recognised Sampath or NTB transaction SMS' });
+    }
     res.status(created ? 201 : 200).json({
       id: tx._id, created, parsed: tx.parsed, possibleDuplicate: !!tx.possibleDuplicateOf,
     });
