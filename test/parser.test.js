@@ -45,6 +45,17 @@ test('account 3009 is Sampath, everything else NTB', () => {
   assert.strictEqual(bankOf({ source: 'manual' }), 'ntb');
 });
 
+test('Sampath SMS still parses when line breaks are lost', () => {
+  const sms = 'LKR 10.00 credited to AC **3009 for yasitha\n21/11/2026 01:27:44\nTo Inq Call 0112303050\nGet protected -Do not Share OTP';
+  for (const v of [sms, sms.replace(/\n/g, '\r\n'), sms.replace(/\n/g, ' '), sms.replace(/\n/g, '')]) {
+    const t = parseSms(v, rx);
+    assert.ok(t, JSON.stringify(v));
+    assert.strictEqual(t.amount, 10);
+    assert.strictEqual(t.description, 'yasitha');
+    assert.strictEqual(t.txnAt.toISOString(), '2026-11-20T19:57:44.000Z');
+  }
+});
+
 test('ignores non-transaction SMS', () => {
   assert.strictEqual(parseSms('Your OTP is 123456. Do not share.', rx), null);
 });

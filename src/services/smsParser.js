@@ -39,7 +39,8 @@ const patterns = [
     // "LKR 25,005.00 debited from AC **3009 via ATM at YAKKALA BRANCH CASH SET\n19/11/2026 12:17:43"
     // "LKR 151,296.06 credited to AC **3009 for yas\n19/11/2026 10:39:36"
     name: 'format-A (credited/debited AC)',
-    re: /^(?<cur>[A-Z]{3})\s+(?<amt>[\d,]+\.\d{2})\s+(?<dir>credited|debited)\s+(?:to|from)\s+AC\s+(?<acct>\S+)\s*(?<rest>.*?)\s*\n\s*(?<dt>\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}:\d{2})/is,
+    // The date normally starts a new line, but some phones/forwarders flatten line breaks to spaces
+    re: /^(?<cur>[A-Z]{3})\s+(?<amt>[\d,]+\.\d{2})\s+(?<dir>credited|debited)\s+(?:to|from)\s+AC\s+(?<acct>\S+)\s*(?<rest>.*?)\s*(?<dt>\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}:\d{2})/is,
     build: (g) => ({
       currency: g.cur.toUpperCase(),
       amount: num(g.amt),

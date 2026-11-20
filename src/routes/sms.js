@@ -24,11 +24,14 @@ router.post('/', requireApiKey, anyText, async (req, res, next) => {
     }
 
     if (config.allowedSenders.length && !config.allowedSenders.includes(sender.toUpperCase())) {
+      console.log(`[sms] ignored, sender "${sender}" not in ALLOWED_SENDERS`);
       return res.status(202).json({ ignored: true, reason: 'sender not in ALLOWED_SENDERS' });
     }
 
     const { tx, created, ignored } = await ingestSms({ sender, body, receivedAt: src.receivedAt });
     if (ignored) {
+      // Shows up in the Render logs, so a missing SMS can be tracked down
+      console.log(`[sms] ignored, no matching format. sender=${sender || '-'} body=${JSON.stringify(body.slice(0, 120))}`);
       return res.status(202).json({ ignored: true, reason: 'not a recognised Sampath or NTB transaction SMS' });
     }
     res.status(created ? 201 : 200).json({
